@@ -114,6 +114,10 @@ func TestRejectsElementsThatCannotBeAnOrbit(t *testing.T) {
 	}
 	for name, change := range map[string]func(*Elements){
 		"zero mean motion":      func(e *Elements) { e.MeanMotion = 0 },
+		"infinite mean motion":  func(e *Elements) { e.MeanMotion = math.Inf(1) },
+		"NaN mean motion":       func(e *Elements) { e.MeanMotion = math.NaN() },
+		"orbit below ground":    func(e *Elements) { e.MeanMotion = 25 },
+		"infinite drag term":    func(e *Elements) { e.BStar = math.Inf(-1) },
 		"eccentricity of one":   func(e *Elements) { e.Eccentricity = 1 },
 		"negative eccentricity": func(e *Elements) { e.Eccentricity = -0.1 },
 		"missing epoch":         func(e *Elements) { e.Epoch = time.Time{} },
@@ -151,5 +155,31 @@ func BenchmarkAt(b *testing.B) {
 		if _, _, err := o.At(float64(i%10000) * 0.5); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestGeodetic(t *testing.T) {
+	at := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	g := GMST(at)
+	// A point 500 km above the equator on the Greenwich meridian.
+	r := 6378.137 + 500
+	lat, lon, alt := Geodetic([3]float64{r * math.Cos(g), r * math.Sin(g), 0}, at)
+	if math.Abs(lat) > 1e-6 || math.Abs(lon) > 1e-6 || math.Abs(alt-500) > 1e-6 {
+		t.Fatalf("equator point: lat %.6f lon %.6f alt %.6f", lat, lon, alt)
+	}
+	// Straight above the north pole; the polar radius is 6356.752 km.
+	lat, _, alt = Geodetic([3]float64{0, 0, 6356.7523142 + 800}, at)
+	if math.Abs(lat-90) > 1e-6 || math.Abs(alt-800) > 1e-3 {
+		t.Fatalf("pole point: lat %.6f alt %.6f", lat, alt)
+	}
+	// 90 degrees east of Greenwich.
+	_, lon, _ = Geodetic([3]float64{r * math.Cos(g+math.Pi/2), r * math.Sin(g+math.Pi/2), 0}, at)
+	if math.Abs(lon-90) > 1e-6 {
+		t.Fatalf("lon = %.6f, want 90", lon)
+	}
+	// The Earth turns once per sidereal day.
+	turned := math.Mod(GMST(at.Add(86164090530833*time.Microsecond/1000))-g+4*math.Pi, 2*math.Pi)
+	if turned > 1e-4 && turned < 2*math.Pi-1e-4 {
+		t.Fatalf("after one sidereal day GMST changed by %.6f rad", turned)
 	}
 }

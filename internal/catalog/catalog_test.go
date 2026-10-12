@@ -68,3 +68,19 @@ func TestLoadMergesSourcesKeepsNewestAndDropsStale(t *testing.T) {
 		t.Fatal("Load succeeded with no readable source")
 	}
 }
+
+func TestAFutureDatedElementSetCannotDisplaceGoodData(t *testing.T) {
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	good := write(t, "good.json", `[{"OBJECT_NAME":"ISS (ZARYA)","EPOCH":"2026-10-12T08:00:00","MEAN_MOTION":15.5,"ECCENTRICITY":0.0004,"INCLINATION":51.6,"NORAD_CAT_ID":25544}]`)
+	forged := write(t, "forged.json", `[{"OBJECT_NAME":"ISS FORGED","EPOCH":"2027-01-01T00:00:00","MEAN_MOTION":15.0,"ECCENTRICITY":0.001,"INCLINATION":5,"NORAD_CAT_ID":25544}]`)
+	c, err := Load([]string{good, forged}, now, 14*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Objects) != 1 || c.Objects[0].Name != "ISS (ZARYA)" {
+		t.Fatalf("objects = %+v, want the genuine element set", c.Objects)
+	}
+	if len(c.Rejected) != 1 || !strings.Contains(c.Rejected[0].Reason, "future") {
+		t.Fatalf("rejected = %+v", c.Rejected)
+	}
+}

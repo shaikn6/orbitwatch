@@ -45,6 +45,9 @@ type Catalog struct {
 
 const epochLayout = "2006-01-02T15:04:05.999999"
 
+// futureSlack allows for element sets issued slightly ahead of time.
+const futureSlack = 6 * time.Hour
+
 // Parse reads one OMM JSON document.
 func Parse(r io.Reader) ([]sgp4.Elements, []Rejected, error) {
 	var raw []omm
@@ -99,6 +102,12 @@ func Load(paths []string, now time.Time, maxAge time.Duration) (*Catalog, error)
 				read++
 				c.Rejected = append(c.Rejected, bad...)
 				for _, e := range good {
+					// "Newest wins" must not let a wrong or hostile source
+					// displace good data by claiming an epoch in the future.
+					if e.Epoch.After(now.Add(futureSlack)) {
+						c.Rejected = append(c.Rejected, Rejected{e.NoradID, e.Name, "epoch is in the future"})
+						continue
+					}
 					if old, ok := newest[e.NoradID]; !ok || e.Epoch.After(old.Epoch) {
 						newest[e.NoradID] = e
 					}

@@ -1,0 +1,6 @@
+{
+  "name": "orbitwatch-viewer",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test orbit.test.mjs" }
+}

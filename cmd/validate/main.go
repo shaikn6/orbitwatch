@@ -47,9 +47,17 @@ func readReference(path string) ([]reference, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(rows) < 2 {
+		return nil, fmt.Errorf("%s has no events", path)
+	}
 	col := map[string]int{}
 	for i, name := range rows[0] {
 		col[name] = i
+	}
+	for _, name := range []string{"NORAD_CAT_ID_1", "NORAD_CAT_ID_2", "DSE_1", "DSE_2", "TCA", "TCA_RANGE", "TCA_RELATIVE_SPEED"} {
+		if _, ok := col[name]; !ok {
+			return nil, fmt.Errorf("%s has no %s column", path, name)
+		}
 	}
 	var out []reference
 	for _, row := range rows[1:] {
