@@ -84,3 +84,22 @@ func TestAFutureDatedElementSetCannotDisplaceGoodData(t *testing.T) {
 		t.Fatalf("rejected = %+v", c.Rejected)
 	}
 }
+
+func TestALaterSourceCannotMoveAnObjectToADifferentOrbit(t *testing.T) {
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	trusted := write(t, "trusted.json", `[{"OBJECT_NAME":"ISS (ZARYA)","EPOCH":"2026-10-12T06:00:00","MEAN_MOTION":15.50,"ECCENTRICITY":0.0004,"INCLINATION":51.64,"NORAD_CAT_ID":25544}]`)
+	update := write(t, "update.json", `[{"OBJECT_NAME":"ISS (ZARYA)","EPOCH":"2026-10-12T10:00:00","MEAN_MOTION":15.51,"ECCENTRICITY":0.0005,"INCLINATION":51.64,"NORAD_CAT_ID":25544}]`)
+	forged := write(t, "forged.json", `[{"OBJECT_NAME":"ISS (ZARYA)","EPOCH":"2026-10-12T11:00:00","MEAN_MOTION":14.20,"ECCENTRICITY":0.0005,"INCLINATION":98.0,"NORAD_CAT_ID":25544}]`)
+
+	c, err := Load([]string{trusted, forged}, now, 14*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Objects) != 1 || c.Objects[0].Inclination != 51.64 || len(c.Rejected) != 1 || !strings.Contains(c.Rejected[0].Reason, "conflicts") {
+		t.Fatalf("a conflicting later source displaced trusted data: %+v, rejected %+v", c.Objects, c.Rejected)
+	}
+	c, _ = Load([]string{trusted, update}, now, 14*24*time.Hour)
+	if len(c.Objects) != 1 || c.Objects[0].MeanMotion != 15.51 {
+		t.Fatalf("a genuine update was not taken: %+v", c.Objects)
+	}
+}

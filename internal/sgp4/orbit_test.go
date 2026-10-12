@@ -183,3 +183,18 @@ func TestGeodetic(t *testing.T) {
 		t.Fatalf("after one sidereal day GMST changed by %.6f rad", turned)
 	}
 }
+
+func TestAtRefusesAbsurdTimeSpans(t *testing.T) {
+	o, err := FromElements(Elements{NoradID: 1, Epoch: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), MeanMotion: 2.0, Eccentricity: 0.7, Inclination: 63.4}, 'i')
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, minutes := range []float64{MaxMinutes * 2, -MaxMinutes * 2, math.Inf(1), math.NaN()} {
+		if _, _, err := o.At(minutes); err == nil {
+			t.Errorf("At(%v) was accepted", minutes)
+		}
+	}
+	if _, _, err := o.At(1440); err != nil {
+		t.Errorf("At(one day) = %v", err)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"time"
@@ -48,11 +49,28 @@ const epochLayout = "2006-01-02T15:04:05.999999"
 // futureSlack allows for element sets issued slightly ahead of time.
 const futureSlack = 6 * time.Hour
 
+// maxElementSets bounds one document; the whole public catalog is about
+// 30,000 objects.
+const maxElementSets = 500_000
+
+// sameOrbit reports whether two element sets can be the same object a few
+// days apart. Manoeuvres change an orbit's size by a fraction of a percent
+// and its tilt by a fraction of a degree; anything larger is a different
+// orbit.
+func sameOrbit(a, b sgp4.Elements) bool {
+	return math.Abs(a.MeanMotion-b.MeanMotion) <= 0.05*a.MeanMotion &&
+		math.Abs(a.Inclination-b.Inclination) <= 2 &&
+		math.Abs(a.Eccentricity-b.Eccentricity) <= 0.05
+}
+
 // Parse reads one OMM JSON document.
 func Parse(r io.Reader) ([]sgp4.Elements, []Rejected, error) {
 	var raw []omm
 	if err := json.NewDecoder(r).Decode(&raw); err != nil {
 		return nil, nil, fmt.Errorf("not an OMM JSON array: %w", err)
+	}
+	if len(raw) > maxElementSets {
+		return nil, nil, fmt.Errorf("document holds %d element sets, more than the limit of %d", len(raw), maxElementSets)
 	}
 	var good []sgp4.Elements
 	var bad []Rejected
@@ -80,8 +98,11 @@ func Parse(r io.Reader) ([]sgp4.Elements, []Rejected, error) {
 	return good, bad, nil
 }
 
-// Load merges the given files. When an object appears more than once, the
-// element set with the latest epoch wins. Element sets older than maxAge at
+// Load merges the given files, which should be listed most trusted first.
+// When an object appears more than once, the element set with the latest
+// epoch wins, but only if it still describes the same orbit: a later source
+// that puts an object somewhere completely different is treated as wrong,
+// not as news, and the earlier one is kept. Element sets older than maxAge at
 // the time now are rejected, because an old element set predicts a position
 // that can be tens of kilometres wrong. A file that cannot be read is an
 // error only if no file could be read at all, so one bad source does not
@@ -108,7 +129,13 @@ func Load(paths []string, now time.Time, maxAge time.Duration) (*Catalog, error)
 						c.Rejected = append(c.Rejected, Rejected{e.NoradID, e.Name, "epoch is in the future"})
 						continue
 					}
-					if old, ok := newest[e.NoradID]; !ok || e.Epoch.After(old.Epoch) {
+					old, seen := newest[e.NoradID]
+					switch {
+					case !seen:
+						newest[e.NoradID] = e
+					case !sameOrbit(old, e):
+						c.Rejected = append(c.Rejected, Rejected{e.NoradID, e.Name, "conflicts with a more trusted source"})
+					case e.Epoch.After(old.Epoch):
 						newest[e.NoradID] = e
 					}
 				}

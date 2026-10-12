@@ -32,6 +32,11 @@ type Elements struct {
 
 const maxMeanMotion = 18.0
 
+// MaxMinutes is the longest span from the element epoch that At accepts,
+// ten years. Element sets are useless long before that, and one branch of
+// the model does work in proportion to the span.
+const MaxMinutes = 10 * 365.25 * 1440
+
 // Orbit is an initialised propagator for one object. It keeps working state
 // between calls, so one Orbit must not be used from two goroutines at once.
 type Orbit struct {
@@ -92,6 +97,9 @@ func FromElements(e Elements, opsMode byte) (*Orbit, error) {
 // after the element epoch. An error means the model has no valid answer for
 // that time, most often because the object has decayed.
 func (o *Orbit) At(minutes float64) (position, velocity [3]float64, err error) {
+	if !(math.Abs(minutes) <= MaxMinutes) {
+		return position, velocity, fmt.Errorf("object %d: %v minutes from epoch is outside the supported span", o.NoradID, minutes)
+	}
 	o.sat.Error = 0
 	p, v := sgp4(&o.sat, minutes)
 	if o.sat.Error != 0 {

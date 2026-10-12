@@ -1,11 +1,13 @@
 // Command orbitwatch screens the public satellite catalog for close
 // approaches and writes the data the globe viewer shows.
 //
+//	orbitwatch fetch    refresh the cached element sets from CelesTrak
 //	orbitwatch screen   compute upcoming close approaches and write web/data
 //	orbitwatch serve    serve the viewer
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,16 +21,19 @@ import (
 	"time"
 
 	"github.com/shaikn6/orbitwatch/internal/catalog"
+	"github.com/shaikn6/orbitwatch/internal/fetch"
 	"github.com/shaikn6/orbitwatch/internal/screen"
 	"github.com/shaikn6/orbitwatch/internal/sgp4"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: orbitwatch screen|serve [flags]")
+		fmt.Fprintln(os.Stderr, "usage: orbitwatch fetch|screen|serve [flags]")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "fetch":
+		runFetch(os.Args[2:])
 	case "screen":
 		runScreen(os.Args[2:])
 	case "serve":
@@ -99,6 +104,28 @@ type summary struct {
 	Formation      int            `json:"slow_pairs_flying_together"`
 	Listed         int            `json:"listed"`
 	Events         []viewerEvent  `json:"events"`
+}
+
+func runFetch(args []string) {
+	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
+	dir := fs.String("dir", "data/raw", "where the element sets are cached")
+	fs.Parse(args)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	results, err := fetch.Update(ctx, fetch.CelesTrak, fetch.Options{Dir: *dir, UserAgent: "orbitwatch/0.1 (research)"})
+	for _, r := range results {
+		switch {
+		case r.Fresh:
+			log.Printf("%s: downloaded %d element sets", r.Source.Name, r.Objects)
+		case r.Err != nil:
+			log.Printf("%s: download failed (%v); keeping the cached copy with %d element sets", r.Source.Name, r.Err, r.Objects)
+		default:
+			log.Printf("%s: cached copy is recent (%d element sets)", r.Source.Name, r.Objects)
+		}
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func runScreen(args []string) {
