@@ -87,22 +87,32 @@ func sameOrbit(a, b sgp4.Elements) bool {
 	if err != nil {
 		return false
 	}
-	predicted, predictedVelocity, err := from.AtTime(newer.Epoch)
-	if err != nil {
-		return false
-	}
-	actual, actualVelocity, err := to.At(0)
-	if err != nil {
-		return false
-	}
 	gapDays := newer.Epoch.Sub(older.Epoch).Hours() / 24
 	allowedKm := math.Min(100+100*gapDays, maxDriftKm)
-	var apart, speedGap float64
-	for k := range 3 {
-		apart += sq(predicted[k] - actual[k])
-		speedGap += sq(predictedVelocity[k] - actualVelocity[k])
+	// Compared at the newer epoch and again two days on. The second look
+	// catches a set that agrees today but is built to part company later,
+	// for instance through a made-up drag term.
+	for _, ahead := range []time.Duration{0, 48 * time.Hour} {
+		at := newer.Epoch.Add(ahead)
+		p1, v1, err := from.AtTime(at)
+		if err != nil {
+			return false
+		}
+		p2, v2, err := to.AtTime(at)
+		if err != nil {
+			return false
+		}
+		var apart, speedGap float64
+		for k := range 3 {
+			apart += sq(p1[k] - p2[k])
+			speedGap += sq(v1[k] - v2[k])
+		}
+		allowed := allowedKm + 100*ahead.Hours()/24
+		if math.Sqrt(apart) > allowed || math.Sqrt(speedGap) > maxSpeedGapKmS {
+			return false
+		}
 	}
-	return math.Sqrt(apart) <= allowedKm && math.Sqrt(speedGap) <= maxSpeedGapKmS
+	return true
 }
 
 const (
@@ -166,6 +176,11 @@ func Parse(r io.Reader) ([]sgp4.Elements, []Rejected, error) {
 // stop the others.
 func Load(paths []string, now time.Time, maxAge time.Duration) (*Catalog, error) {
 	newest := map[int]sgp4.Elements{}
+	// The first element set seen for an object, from the most trusted
+	// source that has it. Every later candidate is judged against this
+	// one, not against the last one accepted, so a run of small steps
+	// cannot walk an object away from where the trusted source put it.
+	anchor := map[int]sgp4.Elements{}
 	c := &Catalog{}
 	var firstErr error
 	read := 0
@@ -189,8 +204,8 @@ func Load(paths []string, now time.Time, maxAge time.Duration) (*Catalog, error)
 					old, seen := newest[e.NoradID]
 					switch {
 					case !seen:
-						newest[e.NoradID] = e
-					case !sameOrbit(old, e):
+						newest[e.NoradID], anchor[e.NoradID] = e, e
+					case !sameOrbit(anchor[e.NoradID], e):
 						c.Rejected = append(c.Rejected, Rejected{e.NoradID, e.Name, "conflicts with a more trusted source"})
 					case e.Epoch.After(old.Epoch):
 						newest[e.NoradID] = e

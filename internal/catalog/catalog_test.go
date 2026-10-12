@@ -200,3 +200,52 @@ func TestSameOrbitAllowanceIsCappedAndChecksDirectionOfTravel(t *testing.T) {
 		t.Fatal("the result depends on argument order")
 	}
 }
+
+func TestSmallStepsAndAForgedDragTermAreCaught(t *testing.T) {
+	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	calm := iss
+	calm.BStar = 0
+
+	// Six sources, each moving the object 60 km further along its orbit
+	// than the one before. Every step is small; the total is not.
+	paths := []string{write(t, "trusted.json", document(calm))}
+	for step := 1; step <= 6; step++ {
+		nudged := later(calm, float64(step))
+		nudged.MeanAnomaly = math.Mod(nudged.MeanAnomaly+0.5*float64(step), 360)
+		paths = append(paths, write(t, "step.json", document(nudged)))
+	}
+	c, err := Load(paths, now, 14*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	honest, _, _ := mustOrbit(t, c.Objects[0]).AtTime(now)
+	trusted, _, _ := mustOrbit(t, parseOne(t, calm)).AtTime(now)
+	if drift := math.Sqrt(sq(honest[0]-trusted[0]) + sq(honest[1]-trusted[1]) + sq(honest[2]-trusted[2])); drift > 250 {
+		t.Fatalf("small steps moved the object %.0f km from where the trusted source puts it", drift)
+	}
+
+	// Identical today, but with a drag term that brings it down within days.
+	sinking := later(calm, 2)
+	sinking.BStar = 0.05
+	if sameOrbit(parseOne(t, calm), parseOne(t, sinking)) {
+		t.Fatal("a set with a forged drag term was accepted")
+	}
+}
+
+func parseOne(t *testing.T, o omm) sgp4.Elements {
+	t.Helper()
+	good, _, err := Parse(strings.NewReader(document(o)))
+	if err != nil || len(good) != 1 {
+		t.Fatalf("fixture did not parse: %v", err)
+	}
+	return good[0]
+}
+
+func mustOrbit(t *testing.T, e sgp4.Elements) *sgp4.Orbit {
+	t.Helper()
+	o, err := sgp4.FromElements(e, 'i')
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
