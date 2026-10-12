@@ -137,3 +137,30 @@ func TestTheProviderIntervalCannotBeUndercut(t *testing.T) {
 		t.Fatalf("a 90-minute-old copy was re-requested with MinAge of one minute: %+v, %d requests", results, hits.Load())
 	}
 }
+
+func TestAnAbsurdRetryAfterCannotBlockUpdatesForGood(t *testing.T) {
+	for _, header := range []string{"99999999999", "9223372036854775807", "-5", "soon"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", header)
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		dir := t.TempDir()
+		path := filepath.Join(dir, "set.json")
+		os.WriteFile(path, []byte(one), 0o644)
+		past := time.Now().Add(-5 * time.Hour)
+		os.Chtimes(path, past, past)
+		Update(context.Background(), []Source{{"set", srv.URL}}, Options{Dir: dir})
+		srv.Close()
+		until := blockedUntil(path)
+		if wait := time.Until(until); wait <= 0 || wait > maxBackOff+time.Minute {
+			t.Errorf("Retry-After %q: blocked for %s, want between 0 and %s", header, wait, maxBackOff)
+		}
+	}
+	// A file on disk claiming a far-future time is not believed either.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "set.json")
+	os.WriteFile(path+blockedSuffix, []byte("2099-01-01T00:00:00Z"), 0o644)
+	if wait := time.Until(blockedUntil(path)); wait > maxBackOff+time.Minute {
+		t.Fatalf("a forged back-off file blocks for %s", wait)
+	}
+}

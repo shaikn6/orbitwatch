@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -301,6 +302,8 @@ func runWatch(args []string) {
 	every := fs.Duration("every", fetch.ProviderInterval, "time between refreshes; downloads never happen more often than every 2 hours")
 	dir := fs.String("dir", "data/raw", "where the element sets are cached")
 	brokers := fs.String("kafka-brokers", "", "comma-separated Kafka brokers; empty runs without a message log")
+	serveAddr := fs.String("serve", "", "also serve the viewer on this address, for example 0.0.0.0:8080")
+	webDir := fs.String("web", "web", "directory with the viewer, used with -serve")
 	cfg := screenConfig{maxAge: 14 * 24 * time.Hour}
 	fs.Float64Var(&cfg.hours, "hours", 48, "how far ahead to look")
 	fs.IntVar(&cfg.top, "top", 2000, "closest approaches to list for the viewer")
@@ -355,6 +358,16 @@ func runWatch(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if *serveAddr != "" {
+		srv := viewerServer(*serveAddr, *webDir)
+		go func() {
+			log.Printf("viewer on http://%s", *serveAddr)
+			if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("viewer stopped: %v", err)
+			}
+		}()
+		defer srv.Close()
+	}
 	pipeline.Loop(ctx, *every, cycle, func(err error) { log.Printf("cycle failed, will retry at the next tick: %v", err) })
 	flush, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -383,20 +396,33 @@ func writeJSON(path string, v any) error {
 	return os.Rename(tmp, path)
 }
 
-func runServe(args []string) {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
-	dir := fs.String("dir", "web", "directory with the viewer")
-	fs.Parse(args)
-	files := http.FileServer(http.Dir(*dir))
+// viewerServer serves the static viewer. It only reads files below dir.
+func viewerServer(addr, dir string) *http.Server {
+	files := http.FileServer(http.Dir(dir))
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		if strings.HasPrefix(r.URL.Path, "/data/") {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
 		files.ServeHTTP(w, r)
 	})
-	srv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	return &http.Server{
+		Addr: addr, Handler: handler,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
+		WriteTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16 << 10,
+	}
+}
+
+func runServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
+	dir := fs.String("dir", "web", "directory with the viewer")
+	fs.Parse(args)
 	log.Printf("viewer on http://%s", *addr)
-	log.Fatal(srv.ListenAndServe())
+	log.Fatal(viewerServer(*addr, *dir).ListenAndServe())
 }

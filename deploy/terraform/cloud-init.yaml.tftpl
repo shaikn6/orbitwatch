@@ -1,0 +1,13 @@
+#cloud-config
+packages:
+  - docker
+
+runcmd:
+  - systemctl enable --now docker
+  - mkdir -p /var/lib/orbitwatch
+  - chown 65532:65532 /var/lib/orbitwatch
+  - >
+    docker run -d --name orbitwatch --restart unless-stopped
+    --cap-drop ALL --security-opt no-new-privileges
+    -p 8080:8080 -v /var/lib/orbitwatch:/app/data
+    ${image}

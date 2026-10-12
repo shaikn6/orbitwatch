@@ -45,6 +45,10 @@ const ProviderInterval = 2 * time.Hour
 // request, unless its answer names a longer wait.
 const backOff = 6 * time.Hour
 
+// maxBackOff caps the wait, whatever the provider's answer or the file on
+// disk says, so that no response can stop updates for good.
+const maxBackOff = 24 * time.Hour
+
 // Result says what happened to one source.
 type Result struct {
 	Source  Source
@@ -123,6 +127,9 @@ func blockedUntil(path string) time.Time {
 	if err != nil {
 		return time.Time{}
 	}
+	if latest := time.Now().Add(maxBackOff); until.After(latest) {
+		return latest
+	}
 	return until
 }
 
@@ -154,8 +161,12 @@ func download(ctx context.Context, source Source, path string, opts Options) (in
 		// The provider is telling us to slow down. Remember it on disk so a
 		// restart does not forget.
 		wait := backOff
-		if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && time.Duration(seconds)*time.Second > wait {
-			wait = time.Duration(seconds) * time.Second
+		if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
+			if seconds >= int(maxBackOff/time.Second) {
+				wait = maxBackOff
+			} else if asked := time.Duration(seconds) * time.Second; asked > wait {
+				wait = asked
+			}
 		}
 		until := time.Now().Add(wait).UTC().Format(time.RFC3339)
 		_ = os.WriteFile(path+blockedSuffix, []byte(until), 0o644)
