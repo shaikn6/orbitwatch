@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shaikn6/orbitwatch/internal/sgp4"
 )
 
 const sample = `[
@@ -161,5 +163,40 @@ func TestParseStopsAtTheElementSetLimit(t *testing.T) {
 		if _, _, err := Parse(strings.NewReader(broken)); err == nil {
 			t.Errorf("Parse(%.20q...) succeeded", broken)
 		}
+	}
+}
+
+func TestSameOrbitAllowanceIsCappedAndChecksDirectionOfTravel(t *testing.T) {
+	parse := func(o omm) sgp4.Elements {
+		good, _, err := Parse(strings.NewReader(document(o)))
+		if err != nil || len(good) != 1 {
+			t.Fatalf("fixture did not parse: %v", err)
+		}
+		return good[0]
+	}
+	// Without drag, so that the simple drift in later() matches the model
+	// over a gap this long.
+	calm := iss
+	calm.BStar = 0
+	base := parse(calm)
+	if !sameOrbit(base, parse(later(calm, 24*10))) {
+		t.Fatal("an honest update ten days later was rejected")
+	}
+	// Ten days on and 1,500 km (about 12.7 degrees) along the orbit from
+	// where it should be: inside an uncapped allowance, outside the cap.
+	shifted := later(calm, 24*10)
+	shifted.MeanAnomaly = math.Mod(shifted.MeanAnomaly+12.7, 360)
+	if sameOrbit(base, parse(shifted)) {
+		t.Fatal("a set 1,500 km out of place was accepted because the gap was long")
+	}
+	// A tilt change no manoeuvre makes between two updates.
+	tilted := later(calm, 1)
+	tilted.Inclination += 1.0
+	if sameOrbit(base, parse(tilted)) {
+		t.Fatal("a set tilted by a whole degree was accepted")
+	}
+	// The check does not depend on which set is passed first.
+	if sameOrbit(parse(shifted), base) || !sameOrbit(parse(later(calm, 6)), base) {
+		t.Fatal("the result depends on argument order")
 	}
 }

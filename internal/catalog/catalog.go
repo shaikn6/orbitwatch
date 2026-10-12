@@ -56,13 +56,25 @@ const maxElementSets = 500_000
 // maxFileBytes bounds one element file on disk.
 const maxFileBytes = 256 << 20
 
-// sameOrbit reports whether two element sets can describe one object. It
-// predicts where the older set puts the object at the newer set's epoch and
-// compares that with where the newer set says it is. Stale elements drift
-// by kilometres per day and manoeuvres add tens of kilometres; a set that
-// places the object hundreds of kilometres away is a different orbit, no
-// matter which of its fields were changed to get it there.
+// sameOrbit reports whether two element sets can describe one object. All
+// of the following must hold:
+//
+//   - the orbit's size, shape and tilt are nearly the same (manoeuvres
+//     change them by fractions of a percent and of a degree);
+//   - where the older set predicts the object to be at the newer set's
+//     epoch is close to where the newer set says it is;
+//   - it is moving in nearly the same direction at nearly the same speed
+//     there, so the two cannot be different orbits that merely cross.
+//
+// The position allowance grows with the time between the two sets, because
+// stale elements drift, but it is capped: a gap too long to judge is not a
+// reason to accept anything.
 func sameOrbit(a, b sgp4.Elements) bool {
+	if math.Abs(a.MeanMotion-b.MeanMotion) > 0.05*a.MeanMotion ||
+		math.Abs(a.Inclination-b.Inclination) > 0.5 ||
+		math.Abs(a.Eccentricity-b.Eccentricity) > 0.05 {
+		return false
+	}
 	older, newer := a, b
 	if newer.Epoch.Before(older.Epoch) {
 		older, newer = newer, older
@@ -75,18 +87,28 @@ func sameOrbit(a, b sgp4.Elements) bool {
 	if err != nil {
 		return false
 	}
-	predicted, _, err := from.AtTime(newer.Epoch)
+	predicted, predictedVelocity, err := from.AtTime(newer.Epoch)
 	if err != nil {
 		return false
 	}
-	actual, _, err := to.At(0)
+	actual, actualVelocity, err := to.At(0)
 	if err != nil {
 		return false
 	}
 	gapDays := newer.Epoch.Sub(older.Epoch).Hours() / 24
-	apart := math.Sqrt(sq(predicted[0]-actual[0]) + sq(predicted[1]-actual[1]) + sq(predicted[2]-actual[2]))
-	return apart <= 200+100*gapDays
+	allowedKm := math.Min(100+100*gapDays, maxDriftKm)
+	var apart, speedGap float64
+	for k := range 3 {
+		apart += sq(predicted[k] - actual[k])
+		speedGap += sq(predictedVelocity[k] - actualVelocity[k])
+	}
+	return math.Sqrt(apart) <= allowedKm && math.Sqrt(speedGap) <= maxSpeedGapKmS
 }
+
+const (
+	maxDriftKm     = 1000 // largest position disagreement ever accepted
+	maxSpeedGapKmS = 0.3  // a change of heading of about two degrees in low orbit
+)
 
 func sq(x float64) float64 { return x * x }
 
