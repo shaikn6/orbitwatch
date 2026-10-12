@@ -41,7 +41,7 @@ bin/orbitwatch serve              # open http://127.0.0.1:8080
 To repeat the checks:
 
 ```sh
-go test ./...                     # orbit model, catalog, screening, fetching
+go test ./...                     # orbit model, catalog, screening, fetching, pipeline
 node --test web/orbit.test.mjs    # the viewer's orbit maths against the server's
 go build -o bin/validate ./cmd/validate && bin/validate   # against a SOCRATES report in data/raw
 ```
@@ -56,12 +56,47 @@ go build -o bin/validate ./cmd/validate && bin/validate   # against a SOCRATES r
 
 **Viewer (`web/`).** The browser animates all objects with a lighter orbit model (an ellipse that drifts the way the Earth's bulge makes it drift). It is checked against SGP4 in the tests: the typical object is within 13 km over up to 40 hours, which is far less than a pixel. The list, distances and times come from the server's full-precision results.
 
-## Not built yet
+## Keeping it current
 
-- A learned avoidance-manoeuvre planner, compared against the standard analytic rule.
-- A streaming pipeline (Kafka) so results update as new orbit data arrives, instead of on demand.
-- A second data source alongside CelesTrak.
-- Cloud deployment.
+```sh
+bin/orbitwatch watch -serve 127.0.0.1:8080                      # refresh every 2 hours and serve the viewer
+bin/orbitwatch watch -kafka-brokers localhost:9092               # also announce changes on Kafka
+```
+
+`watch` repeats the cycle (fetch, screen, rewrite the viewer's data) and, when brokers are given, publishes each new element set to `orbit.elements` and the closest passes to `orbit.conjunctions`. Two things were tested on purpose:
+
+- **A failed cycle does not stop it.** An error or even a crash inside one cycle is reported and the next cycle runs.
+- **Kafka is optional at every moment.** Publishing never blocks a cycle. With an unreachable broker, a full real cycle still completed and wrote its results; the messages were counted as failed.
+
+Not yet tested: delivery to a real broker. The publisher is exercised against a stand-in in the tests only.
+
+Downloads can never happen more often than CelesTrak's two-hour update interval, whatever flags are given, and a refusal (HTTP 403 or 429) is remembered on disk and backed off from for at least six hours. That rule exists because an early test of mine asked again after one hour and was, rightly, refused.
+
+`Dockerfile` builds a small image that runs `watch` with the viewer, and `deploy/terraform` runs it on one AWS instance with the viewer port open only to networks you list. The Terraform passes `terraform validate`; it has not been applied.
+
+## Deciding when to dodge (`rl/`)
+
+Finding a close pass is half the problem. The other half is what an operator does about it, and that is a decision under uncertainty: a warning two days ahead is vague (predictions drift by about a kilometre per day), most warnings come to nothing, and fresh tracking keeps sharpening the picture. A burn made early moves the satellite a long way for almost no fuel but is often unnecessary. A burn made late is well informed but costs more for the same shift.
+
+`rl/conjunction.py` simulates that for many warnings at once, with eight decision points from 48 hours to 3 hours before the pass. Its parts are checked independently: the effect of a burn against a numerical orbit integration (within 1% from 45 minutes to 30 hours ahead), the risk integral against exact and sampled answers, and the stated risk against outcomes (warnings rated about 10% fail about 10% of the time).
+
+Three policies on the same million simulated warnings:
+
+| Policy | Passes inside 200 m, per 1,000 warnings | Collisions per million | Fuel per warning | Burns on | Cost |
+|---|---|---|---|---|---|
+| Do nothing | 37.7 | 401 | 0 | 0% of warnings | 0.754 |
+| Threshold rule, tuned by grid search | 0.17 | 0 | 0.26 cm/s | 16.4% | 0.0735 |
+| Policy learned with PPO (3 runs) | 0.95 to 1.00 | 0 to 5 | 0.23 to 0.24 cm/s | 11.7% to 13.8% | 0.0819 ± 0.0012 |
+
+**The learned policy does not beat the rule.** It learns, from reward alone, to cut the cost ninefold compared with doing nothing, and it burns less fuel than the rule, but it under-reacts in a small number of risky cases, and those are expensive. The tuned rule is about 11% cheaper overall. Training three times longer with a decaying step size narrowed the gap to about 7% (cost 0.0787 ± 0.0019 over 2 runs) without closing it.
+
+Two cautions. The uncertainty model (0.1 km plus 1 km per day along the track, a tenth of that in the other directions) is an assumption chosen to match commonly quoted figures for public tracking data; it is not fitted to any operator's data, and every number in the table depends on it. And "cost" is my weighting of fuel against risk: one failure is priced at twenty full-size burns.
+
+## Not done yet
+
+- A comparison with SOCRATES on a matched snapshot, to repeat the 358-event check at scale.
+- Delivery to a real Kafka broker, and a second data source alongside CelesTrak.
+- Applying the Terraform, and a load test of the viewer.
 
 ## Data and credits
 
