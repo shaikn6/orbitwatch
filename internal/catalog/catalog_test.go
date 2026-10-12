@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,33 @@ const sample = `[
 {"OBJECT_NAME":"BROKEN","OBJECT_ID":"x","EPOCH":"2026-10-11T00:00:00","MEAN_MOTION":0,"ECCENTRICITY":0.1,"INCLINATION":10,"NORAD_CAT_ID":7,"BSTAR":0},
 {"OBJECT_NAME":"BAD EPOCH","OBJECT_ID":"y","EPOCH":"yesterday","MEAN_MOTION":14,"ECCENTRICITY":0.1,"INCLINATION":10,"NORAD_CAT_ID":8,"BSTAR":0}
 ]`
+
+// later returns the element set a tracking network would publish for the
+// same object some hours on: same orbit, with the object moved along it and
+// the orbit's orientation drifted the way the Earth's bulge makes it drift.
+func later(o omm, hours float64) omm {
+	const mu, radius, j2 = 398600.4418, 6378.137, 1.08262668e-3
+	epoch, _ := time.Parse(epochLayout, o.Epoch)
+	dt := hours * 3600
+	n := o.MeanMotion * 2 * math.Pi / 86400
+	a := math.Cbrt(mu / (n * n))
+	k := 1.5 * j2 * math.Pow(radius/(a*(1-o.Eccentricity*o.Eccentricity)), 2) * n
+	inc := o.Inclination * math.Pi / 180
+	deg := 180 / math.Pi
+	wrap := func(x float64) float64 { return math.Mod(math.Mod(x, 360)+360, 360) }
+	o.Epoch = epoch.Add(time.Duration(dt * float64(time.Second))).Format(epochLayout)
+	o.RAAN = wrap(o.RAAN - k*math.Cos(inc)*dt*deg)
+	o.ArgPerigee = wrap(o.ArgPerigee + k*(2-2.5*math.Pow(math.Sin(inc), 2))*dt*deg)
+	o.MeanAnomaly = wrap(o.MeanAnomaly + n*dt*deg)
+	return o
+}
+
+func document(sets ...omm) string {
+	data, _ := json.Marshal(sets)
+	return string(data)
+}
+
+var iss = omm{Name: "ISS (ZARYA)", Epoch: "2026-10-12T08:15:30.123456", MeanMotion: 15.5, Eccentricity: 0.0004, Inclination: 51.63, RAAN: 120.1, ArgPerigee: 80.2, MeanAnomaly: 279.9, NoradID: 25544, BStar: 0.00021}
 
 func write(t *testing.T, name, content string) string {
 	t.Helper()
@@ -45,8 +74,9 @@ func TestParseKeepsGoodElementsAndExplainsRejections(t *testing.T) {
 
 func TestLoadMergesSourcesKeepsNewestAndDropsStale(t *testing.T) {
 	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
-	older := write(t, "a.json", `[{"OBJECT_NAME":"ISS OLD","EPOCH":"2026-10-10T00:00:00","MEAN_MOTION":15.5,"ECCENTRICITY":0.0004,"INCLINATION":51.6,"NORAD_CAT_ID":25544},
-{"OBJECT_NAME":"STALE","EPOCH":"2026-08-01T00:00:00","MEAN_MOTION":14.0,"ECCENTRICITY":0.001,"INCLINATION":98,"NORAD_CAT_ID":900}]`)
+	earlier := later(iss, -56)
+	earlier.Name = "ISS OLD"
+	older := write(t, "a.json", document(earlier, omm{Name: "STALE", Epoch: "2026-08-01T00:00:00", MeanMotion: 14.0, Eccentricity: 0.001, Inclination: 98, NoradID: 900}))
 	newer := write(t, "b.json", sample)
 	missing := filepath.Join(t.TempDir(), "does-not-exist.json")
 
@@ -86,20 +116,50 @@ func TestAFutureDatedElementSetCannotDisplaceGoodData(t *testing.T) {
 }
 
 func TestALaterSourceCannotMoveAnObjectToADifferentOrbit(t *testing.T) {
-	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
-	trusted := write(t, "trusted.json", `[{"OBJECT_NAME":"ISS (ZARYA)","EPOCH":"2026-10-12T06:00:00","MEAN_MOTION":15.50,"ECCENTRICITY":0.0004,"INCLINATION":51.64,"NORAD_CAT_ID":25544}]`)
-	update := write(t, "update.json", `[{"OBJECT_NAME":"ISS (ZARYA)","EPOCH":"2026-10-12T10:00:00","MEAN_MOTION":15.51,"ECCENTRICITY":0.0005,"INCLINATION":51.64,"NORAD_CAT_ID":25544}]`)
-	forged := write(t, "forged.json", `[{"OBJECT_NAME":"ISS (ZARYA)","EPOCH":"2026-10-12T11:00:00","MEAN_MOTION":14.20,"ECCENTRICITY":0.0005,"INCLINATION":98.0,"NORAD_CAT_ID":25544}]`)
+	now := time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC)
+	load := func(second omm) *Catalog {
+		t.Helper()
+		c, err := Load([]string{write(t, "trusted.json", document(iss)), write(t, "second.json", document(second))}, now, 14*24*time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
 
-	c, err := Load([]string{trusted, forged}, now, 14*24*time.Hour)
-	if err != nil {
-		t.Fatal(err)
+	genuine := later(iss, 4)
+	genuine.MeanMotion += 0.001 // a small reboost
+	if c := load(genuine); len(c.Objects) != 1 || c.Objects[0].MeanMotion != genuine.MeanMotion || len(c.Rejected) != 0 {
+		t.Fatalf("a genuine update was not taken: %+v, rejected %+v", c.Objects, c.Rejected)
 	}
-	if len(c.Objects) != 1 || c.Objects[0].Inclination != 51.64 || len(c.Rejected) != 1 || !strings.Contains(c.Rejected[0].Reason, "conflicts") {
-		t.Fatalf("a conflicting later source displaced trusted data: %+v, rejected %+v", c.Objects, c.Rejected)
+
+	forgeries := map[string]func(*omm){
+		"different size and tilt": func(o *omm) { o.MeanMotion, o.Inclination = 14.2, 98 },
+		// The fields a field-by-field comparison would look at all match.
+		"half an orbit ahead": func(o *omm) { o.MeanAnomaly = math.Mod(o.MeanAnomaly+180, 360) },
+		"orbit plane turned":  func(o *omm) { o.RAAN = math.Mod(o.RAAN+90, 360) },
 	}
-	c, _ = Load([]string{trusted, update}, now, 14*24*time.Hour)
-	if len(c.Objects) != 1 || c.Objects[0].MeanMotion != 15.51 {
-		t.Fatalf("a genuine update was not taken: %+v", c.Objects)
+	for name, forge := range forgeries {
+		forged := later(iss, 4)
+		forge(&forged)
+		c := load(forged)
+		if len(c.Objects) != 1 || c.Objects[0].Epoch.Format(epochLayout) != iss.Epoch {
+			t.Errorf("%s: the forged set displaced the trusted one: %+v", name, c.Objects)
+		}
+		if len(c.Rejected) != 1 || !strings.Contains(c.Rejected[0].Reason, "conflicts") {
+			t.Errorf("%s: rejected = %+v", name, c.Rejected)
+		}
+	}
+}
+
+func TestParseStopsAtTheElementSetLimit(t *testing.T) {
+	one := `{"OBJECT_NAME":"X","EPOCH":"2026-10-12T00:00:00","MEAN_MOTION":15,"ECCENTRICITY":0.001,"INCLINATION":50,"NORAD_CAT_ID":5}`
+	huge := "[" + strings.Repeat(one+",", maxElementSets) + one + "]"
+	if _, _, err := Parse(strings.NewReader(huge)); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("err = %v, want the limit to be enforced", err)
+	}
+	for _, broken := range []string{`[` + one, `[` + one + `,`, `{}`, ``, `[1,2]`} {
+		if _, _, err := Parse(strings.NewReader(broken)); err == nil {
+			t.Errorf("Parse(%.20q...) succeeded", broken)
+		}
 	}
 }

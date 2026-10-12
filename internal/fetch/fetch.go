@@ -134,12 +134,21 @@ func download(ctx context.Context, source Source, path string, opts Options) (in
 	if len(good) == 0 {
 		return 0, fmt.Errorf("response holds no usable element sets")
 	}
-	tmp := path + ".part"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
+	// A uniquely named temporary file, created exclusively, so nothing that
+	// was placed at a guessable path can be written through.
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+source.Name+"-*.part")
+	if err != nil {
 		return 0, err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return 0, err
+	}
+	if err := tmp.Close(); err != nil {
+		return 0, err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return 0, err
 	}
 	return len(good), nil

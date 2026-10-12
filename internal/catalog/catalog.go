@@ -53,28 +53,60 @@ const futureSlack = 6 * time.Hour
 // 30,000 objects.
 const maxElementSets = 500_000
 
-// sameOrbit reports whether two element sets can be the same object a few
-// days apart. Manoeuvres change an orbit's size by a fraction of a percent
-// and its tilt by a fraction of a degree; anything larger is a different
-// orbit.
+// maxFileBytes bounds one element file on disk.
+const maxFileBytes = 256 << 20
+
+// sameOrbit reports whether two element sets can describe one object. It
+// predicts where the older set puts the object at the newer set's epoch and
+// compares that with where the newer set says it is. Stale elements drift
+// by kilometres per day and manoeuvres add tens of kilometres; a set that
+// places the object hundreds of kilometres away is a different orbit, no
+// matter which of its fields were changed to get it there.
 func sameOrbit(a, b sgp4.Elements) bool {
-	return math.Abs(a.MeanMotion-b.MeanMotion) <= 0.05*a.MeanMotion &&
-		math.Abs(a.Inclination-b.Inclination) <= 2 &&
-		math.Abs(a.Eccentricity-b.Eccentricity) <= 0.05
+	older, newer := a, b
+	if newer.Epoch.Before(older.Epoch) {
+		older, newer = newer, older
+	}
+	from, err := sgp4.FromElements(older, 'i')
+	if err != nil {
+		return false
+	}
+	to, err := sgp4.FromElements(newer, 'i')
+	if err != nil {
+		return false
+	}
+	predicted, _, err := from.AtTime(newer.Epoch)
+	if err != nil {
+		return false
+	}
+	actual, _, err := to.At(0)
+	if err != nil {
+		return false
+	}
+	gapDays := newer.Epoch.Sub(older.Epoch).Hours() / 24
+	apart := math.Sqrt(sq(predicted[0]-actual[0]) + sq(predicted[1]-actual[1]) + sq(predicted[2]-actual[2]))
+	return apart <= 200+100*gapDays
 }
 
-// Parse reads one OMM JSON document.
+func sq(x float64) float64 { return x * x }
+
+// Parse reads one OMM JSON document. It decodes one element set at a time,
+// so an oversized document is refused before it is held in memory.
 func Parse(r io.Reader) ([]sgp4.Elements, []Rejected, error) {
-	var raw []omm
-	if err := json.NewDecoder(r).Decode(&raw); err != nil {
-		return nil, nil, fmt.Errorf("not an OMM JSON array: %w", err)
-	}
-	if len(raw) > maxElementSets {
-		return nil, nil, fmt.Errorf("document holds %d element sets, more than the limit of %d", len(raw), maxElementSets)
+	dec := json.NewDecoder(r)
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
+		return nil, nil, fmt.Errorf("not an OMM JSON array")
 	}
 	var good []sgp4.Elements
 	var bad []Rejected
-	for _, o := range raw {
+	for count := 0; dec.More(); count++ {
+		if count >= maxElementSets {
+			return nil, nil, fmt.Errorf("document holds more than %d element sets", maxElementSets)
+		}
+		var o omm
+		if err := dec.Decode(&o); err != nil {
+			return nil, nil, fmt.Errorf("not an OMM JSON array: %w", err)
+		}
 		epoch, err := time.Parse(epochLayout, o.Epoch)
 		if err != nil {
 			bad = append(bad, Rejected{o.NoradID, o.Name, "unreadable epoch " + o.Epoch})
@@ -94,6 +126,9 @@ func Parse(r io.Reader) ([]sgp4.Elements, []Rejected, error) {
 			continue
 		}
 		good = append(good, e)
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, nil, fmt.Errorf("not an OMM JSON array: %w", err)
 	}
 	return good, bad, nil
 }
@@ -117,7 +152,7 @@ func Load(paths []string, now time.Time, maxAge time.Duration) (*Catalog, error)
 		if err == nil {
 			var good []sgp4.Elements
 			var bad []Rejected
-			good, bad, err = Parse(file)
+			good, bad, err = Parse(io.LimitReader(file, maxFileBytes))
 			file.Close()
 			if err == nil {
 				read++
