@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/shaikn6/orbitwatch/internal/sgp4"
 )
 
 const sample = `[
@@ -74,7 +72,7 @@ func TestParseKeepsGoodElementsAndExplainsRejections(t *testing.T) {
 	}
 }
 
-func TestLoadMergesSourcesKeepsNewestAndDropsStale(t *testing.T) {
+func TestLoadMergesSourcesFirstListedWinsAndStaleIsDropped(t *testing.T) {
 	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
 	earlier := later(iss, -56)
 	earlier.Name = "ISS OLD"
@@ -86,7 +84,7 @@ func TestLoadMergesSourcesKeepsNewestAndDropsStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("one unreadable source must not stop the others: %v", err)
 	}
-	if len(c.Objects) != 2 || c.Objects[0].Name != "ISS (ZARYA)" || c.Objects[1].NoradID != 100537 {
+	if len(c.Objects) != 2 || c.Objects[0].Name != "ISS OLD" || c.Objects[1].NoradID != 100537 || c.Shadowed != 1 {
 		t.Fatalf("objects = %+v", c.Objects)
 	}
 	stale := false
@@ -117,42 +115,6 @@ func TestAFutureDatedElementSetCannotDisplaceGoodData(t *testing.T) {
 	}
 }
 
-func TestALaterSourceCannotMoveAnObjectToADifferentOrbit(t *testing.T) {
-	now := time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC)
-	load := func(second omm) *Catalog {
-		t.Helper()
-		c, err := Load([]string{write(t, "trusted.json", document(iss)), write(t, "second.json", document(second))}, now, 14*24*time.Hour)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return c
-	}
-
-	genuine := later(iss, 4)
-	genuine.MeanMotion += 0.001 // a small reboost
-	if c := load(genuine); len(c.Objects) != 1 || c.Objects[0].MeanMotion != genuine.MeanMotion || len(c.Rejected) != 0 {
-		t.Fatalf("a genuine update was not taken: %+v, rejected %+v", c.Objects, c.Rejected)
-	}
-
-	forgeries := map[string]func(*omm){
-		"different size and tilt": func(o *omm) { o.MeanMotion, o.Inclination = 14.2, 98 },
-		// The fields a field-by-field comparison would look at all match.
-		"half an orbit ahead": func(o *omm) { o.MeanAnomaly = math.Mod(o.MeanAnomaly+180, 360) },
-		"orbit plane turned":  func(o *omm) { o.RAAN = math.Mod(o.RAAN+90, 360) },
-	}
-	for name, forge := range forgeries {
-		forged := later(iss, 4)
-		forge(&forged)
-		c := load(forged)
-		if len(c.Objects) != 1 || c.Objects[0].Epoch.Format(epochLayout) != iss.Epoch {
-			t.Errorf("%s: the forged set displaced the trusted one: %+v", name, c.Objects)
-		}
-		if len(c.Rejected) != 1 || !strings.Contains(c.Rejected[0].Reason, "conflicts") {
-			t.Errorf("%s: rejected = %+v", name, c.Rejected)
-		}
-	}
-}
-
 func TestParseStopsAtTheElementSetLimit(t *testing.T) {
 	one := `{"OBJECT_NAME":"X","EPOCH":"2026-10-12T00:00:00","MEAN_MOTION":15,"ECCENTRICITY":0.001,"INCLINATION":50,"NORAD_CAT_ID":5}`
 	huge := "[" + strings.Repeat(one+",", maxElementSets) + one + "]"
@@ -166,86 +128,49 @@ func TestParseStopsAtTheElementSetLimit(t *testing.T) {
 	}
 }
 
-func TestSameOrbitAllowanceIsCappedAndChecksDirectionOfTravel(t *testing.T) {
-	parse := func(o omm) sgp4.Elements {
-		good, _, err := Parse(strings.NewReader(document(o)))
-		if err != nil || len(good) != 1 {
-			t.Fatalf("fixture did not parse: %v", err)
+func TestALessTrustedSourceCanOnlyFillGaps(t *testing.T) {
+	now := time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC)
+	trusted := write(t, "trusted.json", document(iss))
+	extra := omm{Name: "ONLY IN SECOND", Epoch: "2026-10-12T09:00:00", MeanMotion: 14.2, Eccentricity: 0.001, Inclination: 98, NoradID: 43013}
+
+	// Whatever the second source says about an object the first one has,
+	// newer, subtly shifted or wildly different, it is not used.
+	attempts := map[string]func(*omm){
+		"newer and plausible":   func(o *omm) { o.MeanMotion += 0.001 },
+		"moved along the orbit": func(o *omm) { o.MeanAnomaly = math.Mod(o.MeanAnomaly+0.4, 360) },
+		"forged drag term":      func(o *omm) { o.BStar = 0.05 },
+		"different orbit":       func(o *omm) { o.MeanMotion, o.Inclination = 14.2, 98 },
+	}
+	for name, change := range attempts {
+		other := later(iss, 4)
+		change(&other)
+		c, err := Load([]string{trusted, write(t, "second.json", document(other, extra))}, now, 14*24*time.Hour)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return good[0]
+		if len(c.Objects) != 2 || c.Objects[0].Epoch.Format(epochLayout) != iss.Epoch || c.Objects[0].BStar != iss.BStar {
+			t.Errorf("%s: the less trusted source changed a trusted object: %+v", name, c.Objects[0])
+		}
+		if c.Objects[1].NoradID != 43013 || c.Shadowed != 1 {
+			t.Errorf("%s: gap not filled or shadowing not counted: %+v, shadowed %d", name, c.Objects, c.Shadowed)
+		}
 	}
-	// Without drag, so that the simple drift in later() matches the model
-	// over a gap this long.
-	calm := iss
-	calm.BStar = 0
-	base := parse(calm)
-	if !sameOrbit(base, parse(later(calm, 24*10))) {
-		t.Fatal("an honest update ten days later was rejected")
-	}
-	// Ten days on and 1,500 km (about 12.7 degrees) along the orbit from
-	// where it should be: inside an uncapped allowance, outside the cap.
-	shifted := later(calm, 24*10)
-	shifted.MeanAnomaly = math.Mod(shifted.MeanAnomaly+12.7, 360)
-	if sameOrbit(base, parse(shifted)) {
-		t.Fatal("a set 1,500 km out of place was accepted because the gap was long")
-	}
-	// A tilt change no manoeuvre makes between two updates.
-	tilted := later(calm, 1)
-	tilted.Inclination += 1.0
-	if sameOrbit(base, parse(tilted)) {
-		t.Fatal("a set tilted by a whole degree was accepted")
-	}
-	// The check does not depend on which set is passed first.
-	if sameOrbit(parse(shifted), base) || !sameOrbit(parse(later(calm, 6)), base) {
-		t.Fatal("the result depends on argument order")
+
+	// Order is what carries trust: listed first, the other source wins.
+	c, _ := Load([]string{write(t, "second.json", document(later(iss, 4))), trusted}, now, 14*24*time.Hour)
+	if c.Objects[0].Epoch.Format(epochLayout) == iss.Epoch {
+		t.Fatal("the first-listed source did not take precedence")
 	}
 }
 
-func TestSmallStepsAndAForgedDragTermAreCaught(t *testing.T) {
-	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
-	calm := iss
-	calm.BStar = 0
-
-	// Six sources, each moving the object 60 km further along its orbit
-	// than the one before. Every step is small; the total is not.
-	paths := []string{write(t, "trusted.json", document(calm))}
-	for step := 1; step <= 6; step++ {
-		nudged := later(calm, float64(step))
-		nudged.MeanAnomaly = math.Mod(nudged.MeanAnomaly+0.5*float64(step), 360)
-		paths = append(paths, write(t, "step.json", document(nudged)))
-	}
-	c, err := Load(paths, now, 14*24*time.Hour)
+func TestWithinOneFileTheNewestElementSetIsUsed(t *testing.T) {
+	now := time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC)
+	newer := later(iss, 3)
+	c, err := Load([]string{write(t, "one.json", document(newer, iss, later(iss, -20)))}, now, 14*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	honest, _, _ := mustOrbit(t, c.Objects[0]).AtTime(now)
-	trusted, _, _ := mustOrbit(t, parseOne(t, calm)).AtTime(now)
-	if drift := math.Sqrt(sq(honest[0]-trusted[0]) + sq(honest[1]-trusted[1]) + sq(honest[2]-trusted[2])); drift > 250 {
-		t.Fatalf("small steps moved the object %.0f km from where the trusted source puts it", drift)
+	if len(c.Objects) != 1 || c.Objects[0].Epoch.Format(epochLayout) != newer.Epoch {
+		t.Fatalf("objects = %+v, want the newest of the three", c.Objects)
 	}
-
-	// Identical today, but with a drag term that brings it down within days.
-	sinking := later(calm, 2)
-	sinking.BStar = 0.05
-	if sameOrbit(parseOne(t, calm), parseOne(t, sinking)) {
-		t.Fatal("a set with a forged drag term was accepted")
-	}
-}
-
-func parseOne(t *testing.T, o omm) sgp4.Elements {
-	t.Helper()
-	good, _, err := Parse(strings.NewReader(document(o)))
-	if err != nil || len(good) != 1 {
-		t.Fatalf("fixture did not parse: %v", err)
-	}
-	return good[0]
-}
-
-func mustOrbit(t *testing.T, e sgp4.Elements) *sgp4.Orbit {
-	t.Helper()
-	o, err := sgp4.FromElements(e, 'i')
-	if err != nil {
-		t.Fatal(err)
-	}
-	return o
 }

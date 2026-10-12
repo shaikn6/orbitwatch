@@ -91,3 +91,49 @@ func TestUpdateFailsOnlyWhenThereIsNoDataAtAll(t *testing.T) {
 		t.Fatalf("err = %v, want a no-data error", err)
 	}
 }
+
+func TestARefusalIsRememberedAndTheSourceLeftAlone(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "set.json")
+	if err := os.WriteFile(path, []byte(one), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-5 * time.Hour)
+	os.Chtimes(path, past, past)
+	sources := []Source{{"set", srv.URL}}
+
+	for attempt := range 4 {
+		// A new Options each time, as after a restart: the back-off is on disk.
+		results, err := Update(context.Background(), sources, Options{Dir: dir})
+		if err != nil || results[0].Err == nil || results[0].Objects != 1 {
+			t.Fatalf("attempt %d: results %+v, err %v; want the cached copy used and the refusal reported", attempt, results, err)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("the provider was asked %d times after refusing; want once", hits.Load())
+	}
+}
+
+func TestTheProviderIntervalCannotBeUndercut(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Write([]byte(one))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "set.json")
+	os.WriteFile(path, []byte(one), 0o644)
+	recent := time.Now().Add(-90 * time.Minute)
+	os.Chtimes(path, recent, recent)
+	results, err := Update(context.Background(), []Source{{"set", srv.URL}}, Options{Dir: dir, MinAge: time.Minute})
+	if err != nil || results[0].Fresh || hits.Load() != 0 {
+		t.Fatalf("a 90-minute-old copy was re-requested with MinAge of one minute: %+v, %d requests", results, hits.Load())
+	}
+}

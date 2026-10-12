@@ -3,6 +3,7 @@
 //
 //	orbitwatch fetch    refresh the cached element sets from CelesTrak
 //	orbitwatch screen   compute upcoming close approaches and write web/data
+//	orbitwatch watch    keep doing both on a schedule, announcing changes on Kafka
 //	orbitwatch serve    serve the viewer
 package main
 
@@ -15,20 +16,24 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/shaikn6/orbitwatch/internal/catalog"
 	"github.com/shaikn6/orbitwatch/internal/fetch"
+	"github.com/shaikn6/orbitwatch/internal/pipeline"
 	"github.com/shaikn6/orbitwatch/internal/screen"
 	"github.com/shaikn6/orbitwatch/internal/sgp4"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: orbitwatch fetch|screen|serve [flags]")
+		fmt.Fprintln(os.Stderr, "usage: orbitwatch fetch|screen|watch|serve [flags]")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -36,6 +41,8 @@ func main() {
 		runFetch(os.Args[2:])
 	case "screen":
 		runScreen(os.Args[2:])
+	case "watch":
+		runWatch(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	default:
@@ -128,27 +135,44 @@ func runFetch(args []string) {
 	}
 }
 
+type screenConfig struct {
+	elements string
+	start    time.Time
+	hours    float64
+	maxAge   time.Duration
+	top      int
+	out      string
+}
+
 func runScreen(args []string) {
 	fs := flag.NewFlagSet("screen", flag.ExitOnError)
-	elements := fs.String("elements", "data/raw/gp_*.json", "glob of OMM JSON element files")
-	hours := fs.Float64("hours", 48, "how far ahead to look")
+	cfg := screenConfig{}
+	fs.StringVar(&cfg.elements, "elements", "data/raw/gp_*.json", "glob of OMM JSON element files")
+	fs.Float64Var(&cfg.hours, "hours", 48, "how far ahead to look")
 	startFlag := fs.String("start", "", "window start, RFC 3339; default now")
-	maxAge := fs.Duration("max-age", 14*24*time.Hour, "ignore element sets older than this")
-	top := fs.Int("top", 2000, "closest approaches to list for the viewer")
-	out := fs.String("out", "web/data", "output directory")
+	fs.DurationVar(&cfg.maxAge, "max-age", 14*24*time.Hour, "ignore element sets older than this")
+	fs.IntVar(&cfg.top, "top", 2000, "closest approaches to list for the viewer")
+	fs.StringVar(&cfg.out, "out", "web/data", "output directory")
 	fs.Parse(args)
-
-	start := time.Now().UTC().Truncate(time.Minute)
+	cfg.start = time.Now().UTC().Truncate(time.Minute)
 	if *startFlag != "" {
 		var err error
-		if start, err = time.Parse(time.RFC3339, *startFlag); err != nil {
+		if cfg.start, err = time.Parse(time.RFC3339, *startFlag); err != nil {
 			log.Fatalf("bad -start: %v", err)
 		}
 	}
-	paths, _ := filepath.Glob(*elements)
-	cat, err := catalog.Load(paths, start, *maxAge)
-	if err != nil {
+	if _, _, err := screenOnce(cfg); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// screenOnce loads the cached element sets, screens them and writes the
+// viewer's data files. It returns the summary and the objects it used.
+func screenOnce(cfg screenConfig) (*summary, []sgp4.Elements, error) {
+	paths, _ := filepath.Glob(cfg.elements)
+	cat, err := catalog.Load(paths, cfg.start, cfg.maxAge)
+	if err != nil {
+		return nil, nil, err
 	}
 	active := map[int]bool{}
 	for _, path := range paths {
@@ -164,17 +188,17 @@ func runScreen(args []string) {
 		}
 	}
 
-	window := time.Duration(*hours * float64(time.Hour))
-	log.Printf("%d objects (%d rejected), screening %s from %s", len(cat.Objects), len(cat.Rejected), window, start.Format(time.RFC3339))
-	events, stats, err := screen.Run(cat.Objects, screen.Config{Start: start, Duration: window})
+	window := time.Duration(cfg.hours * float64(time.Hour))
+	log.Printf("%d objects (%d rejected), screening %s from %s", len(cat.Objects), len(cat.Rejected), window, cfg.start.Format(time.RFC3339))
+	events, stats, err := screen.Run(cat.Objects, screen.Config{Start: cfg.start, Duration: window})
 	if err != nil {
-		log.Fatal(err)
+		return nil, nil, err
 	}
 	log.Printf("%d close approaches under 5 km in %s", len(events), stats.Elapsed.Round(time.Second))
 
 	byID := map[int]sgp4.Elements{}
 	sum := summary{
-		Generated: time.Now().UTC(), WindowStart: start, WindowHours: *hours, Objects: len(cat.Objects),
+		Generated: time.Now().UTC(), WindowStart: cfg.start, WindowHours: cfg.hours, Objects: len(cat.Objects),
 		ObjectsByKind: map[string]int{}, Rejected: len(cat.Rejected), ElapsedSeconds: stats.Elapsed.Seconds(), PairChecks: stats.PairChecks,
 	}
 	vc := viewerCatalog{Generated: sum.Generated}
@@ -209,7 +233,7 @@ func runScreen(args []string) {
 		flybys = append(flybys, e)
 	}
 	sort.Slice(flybys, func(i, j int) bool { return flybys[i].MissKm < flybys[j].MissKm })
-	for _, e := range flybys[:min(*top, len(flybys))] {
+	for _, e := range flybys[:min(cfg.top, len(flybys))] {
 		a, b := byID[e.A], byID[e.B]
 		orbit, err := sgp4.FromElements(a, 'i')
 		if err != nil {
@@ -229,8 +253,8 @@ func runScreen(args []string) {
 	}
 	sum.Listed = len(sum.Events)
 
-	if err := os.MkdirAll(*out, 0o755); err != nil {
-		log.Fatal(err)
+	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
+		return nil, nil, err
 	}
 	// Reference positions from the full model, so the viewer's lighter
 	// orbit maths can be checked against it (see web/orbit.test.mjs).
@@ -242,17 +266,102 @@ func runScreen(args []string) {
 	var samples []sample
 	for i := 0; i < len(cat.Objects); i += max(1, len(cat.Objects)/400) {
 		e := cat.Objects[i]
-		at := start.Add(time.Duration(i%40) * time.Hour)
+		at := cfg.start.Add(time.Duration(i%40) * time.Hour)
 		if orbit, err := sgp4.FromElements(e, 'i'); err == nil {
 			if pos, _, err := orbit.AtTime(at); err == nil {
 				samples = append(samples, sample{e.NoradID, float64(at.UnixMicro()) / 1e6, pos})
 			}
 		}
 	}
-	writeJSON(filepath.Join(*out, "check.json"), samples)
-	writeJSON(filepath.Join(*out, "catalog.json"), vc)
-	writeJSON(filepath.Join(*out, "conjunctions.json"), sum)
-	log.Printf("wrote %s: %d flybys under 5 km, %d under 1 km, %d under 200 m, %d pairs flying together", *out, sum.Under5Km, sum.Under1Km, sum.Under200M, sum.Formation)
+	for name, v := range map[string]any{"check.json": samples, "catalog.json": vc, "conjunctions.json": sum} {
+		if err := writeJSON(filepath.Join(cfg.out, name), v); err != nil {
+			return nil, nil, err
+		}
+	}
+	log.Printf("wrote %s: %d flybys under 5 km, %d under 1 km, %d under 200 m, %d pairs flying together", cfg.out, sum.Under5Km, sum.Under1Km, sum.Under200M, sum.Formation)
+	return &sum, cat.Objects, nil
+}
+
+// elementMessage is one element set as announced on the log.
+type elementMessage struct {
+	NoradID      int       `json:"norad_id"`
+	Name         string    `json:"name"`
+	Epoch        time.Time `json:"epoch"`
+	MeanMotion   float64   `json:"mean_motion_rev_per_day"`
+	Eccentricity float64   `json:"eccentricity"`
+	Inclination  float64   `json:"inclination_deg"`
+	RAAN         float64   `json:"raan_deg"`
+	ArgPerigee   float64   `json:"arg_perigee_deg"`
+	MeanAnomaly  float64   `json:"mean_anomaly_deg"`
+	BStar        float64   `json:"bstar"`
+}
+
+func runWatch(args []string) {
+	fs := flag.NewFlagSet("watch", flag.ExitOnError)
+	every := fs.Duration("every", fetch.ProviderInterval, "time between refreshes; downloads never happen more often than every 2 hours")
+	dir := fs.String("dir", "data/raw", "where the element sets are cached")
+	brokers := fs.String("kafka-brokers", "", "comma-separated Kafka brokers; empty runs without a message log")
+	cfg := screenConfig{maxAge: 14 * 24 * time.Hour}
+	fs.Float64Var(&cfg.hours, "hours", 48, "how far ahead to look")
+	fs.IntVar(&cfg.top, "top", 2000, "closest approaches to list for the viewer")
+	fs.StringVar(&cfg.out, "out", "web/data", "output directory")
+	fs.Parse(args)
+	cfg.elements = filepath.Join(*dir, "gp_*.json")
+
+	// The message log is optional: without it, or if it cannot be set up,
+	// the pipeline still refreshes and screens.
+	var publisher *pipeline.Publisher
+	if *brokers != "" {
+		if kafka, err := pipeline.NewKafka(strings.Split(*brokers, ",")); err != nil {
+			log.Printf("kafka unavailable, continuing without it: %v", err)
+		} else {
+			publisher = pipeline.NewPublisher(kafka, 1<<16)
+		}
+	}
+
+	epochs := map[int]time.Time{}
+	cycle := func(ctx context.Context) error {
+		results, err := fetch.Update(ctx, fetch.CelesTrak, fetch.Options{Dir: *dir, MinAge: *every, UserAgent: "orbitwatch/0.1 (research)"})
+		for _, r := range results {
+			if r.Err != nil {
+				log.Printf("%s: download failed (%v); using the cached copy with %d element sets", r.Source.Name, r.Err, r.Objects)
+			}
+		}
+		if err != nil {
+			return err
+		}
+		cfg.start = time.Now().UTC().Truncate(time.Minute)
+		sum, objects, err := screenOnce(cfg)
+		if err != nil {
+			return err
+		}
+		changed := 0
+		for _, e := range objects {
+			if epochs[e.NoradID].Equal(e.Epoch) {
+				continue
+			}
+			epochs[e.NoradID] = e.Epoch
+			changed++
+			value, _ := json.Marshal(elementMessage{e.NoradID, e.Name, e.Epoch, e.MeanMotion, e.Eccentricity, e.Inclination, e.RAAN, e.ArgPerigee, e.MeanAnomaly, e.BStar})
+			publisher.Publish(pipeline.Message{Topic: "orbit.elements", Key: []byte(strconv.Itoa(e.NoradID)), Value: value})
+		}
+		for _, event := range sum.Events[:min(200, len(sum.Events))] {
+			value, _ := json.Marshal(event)
+			publisher.Publish(pipeline.Message{Topic: "orbit.conjunctions", Key: []byte(fmt.Sprintf("%d-%d", event.A, event.BID)), Value: value})
+		}
+		log.Printf("cycle done: %d objects (%d with new element sets), %d passes under 1 km, messages %+v", sum.Objects, changed, sum.Under1Km, publisher.Counters())
+		return nil
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	pipeline.Loop(ctx, *every, cycle, func(err error) { log.Printf("cycle failed, will retry at the next tick: %v", err) })
+	flush, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := publisher.Close(flush); err != nil {
+		log.Printf("message log did not drain: %v", err)
+	}
+	log.Printf("stopped; messages %+v", publisher.Counters())
 }
 
 func round(x float64, places int) float64 {
@@ -262,18 +371,16 @@ func round(x float64, places int) float64 {
 
 // writeJSON writes to a temporary file first so the viewer never reads a
 // half-written file.
-func writeJSON(path string, v any) {
+func writeJSON(path string, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		log.Fatal(err)
+		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		log.Fatal(err)
-	}
+	return os.Rename(tmp, path)
 }
 
 func runServe(args []string) {

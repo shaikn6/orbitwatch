@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/shaikn6/orbitwatch/internal/catalog"
@@ -34,6 +36,15 @@ var CelesTrak = []Source{
 	{"gp_name_rb", "https://celestrak.org/NORAD/elements/gp.php?NAME=R/B&FORMAT=json"},
 }
 
+// ProviderInterval is how often the provider refreshes its data and the
+// shortest gap it accepts between requests for the same set. No option can
+// make Update ask more often than this.
+const ProviderInterval = 2 * time.Hour
+
+// backOff is how long a source is left alone after the provider refuses a
+// request, unless its answer names a longer wait.
+const backOff = 6 * time.Hour
+
 // Result says what happened to one source.
 type Result struct {
 	Source  Source
@@ -45,7 +56,7 @@ type Result struct {
 // Options configures Update.
 type Options struct {
 	Dir       string
-	MinAge    time.Duration // do not re-download files younger than this; default 2 h
+	MinAge    time.Duration // do not re-download files younger than this; never less than ProviderInterval
 	MaxBytes  int64         // refuse larger responses; default 64 MiB
 	UserAgent string
 	Client    *http.Client
@@ -54,8 +65,8 @@ type Options struct {
 // Update refreshes every source and reports on each. It returns an error
 // only when a source has neither a fresh download nor a usable cached copy.
 func Update(ctx context.Context, sources []Source, opts Options) ([]Result, error) {
-	if opts.MinAge <= 0 {
-		opts.MinAge = 2 * time.Hour
+	if opts.MinAge < ProviderInterval {
+		opts.MinAge = ProviderInterval
 	}
 	if opts.MaxBytes <= 0 {
 		opts.MaxBytes = 64 << 20
@@ -78,6 +89,14 @@ func Update(ctx context.Context, sources []Source, opts Options) ([]Result, erro
 			results[i].Objects = countCached(path)
 			continue
 		}
+		if until := blockedUntil(path); time.Now().Before(until) {
+			results[i].Err = fmt.Errorf("the provider refused an earlier request; not asking again before %s", until.Format(time.RFC3339))
+			results[i].Objects = countCached(path)
+			if results[i].Objects == 0 && unusable == nil {
+				unusable = fmt.Errorf("%s: no data: %w", source.Name, results[i].Err)
+			}
+			continue
+		}
 		count, err := download(ctx, source, path, opts)
 		if err == nil {
 			results[i].Objects, results[i].Fresh = count, true
@@ -90,6 +109,21 @@ func Update(ctx context.Context, sources []Source, opts Options) ([]Result, erro
 		}
 	}
 	return results, unusable
+}
+
+const blockedSuffix = ".retry-after"
+
+// blockedUntil reads the time before which a source must not be asked again.
+func blockedUntil(path string) time.Time {
+	data, err := os.ReadFile(path + blockedSuffix)
+	if err != nil {
+		return time.Time{}
+	}
+	until, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data)))
+	if err != nil {
+		return time.Time{}
+	}
+	return until
 }
 
 func countCached(path string) int {
@@ -116,6 +150,17 @@ func download(ctx context.Context, source Source, path string, opts Options) (in
 		return 0, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+		// The provider is telling us to slow down. Remember it on disk so a
+		// restart does not forget.
+		wait := backOff
+		if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && time.Duration(seconds)*time.Second > wait {
+			wait = time.Duration(seconds) * time.Second
+		}
+		until := time.Now().Add(wait).UTC().Format(time.RFC3339)
+		_ = os.WriteFile(path+blockedSuffix, []byte(until), 0o644)
+		return 0, fmt.Errorf("server answered %s; backing off until %s", resp.Status, until)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("server answered %s", resp.Status)
 	}
@@ -151,5 +196,6 @@ func download(ctx context.Context, source Source, path string, opts Options) (in
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return 0, err
 	}
+	os.Remove(path + blockedSuffix)
 	return len(good), nil
 }
