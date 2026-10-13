@@ -5,7 +5,9 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { gmst, position, prepare } from "./orbit.js";
 
-const dir = new URL("./data/", import.meta.url);
+// A small committed sample of the catalogue with reference positions from
+// the server, so the test runs without downloading anything.
+const dir = new URL("./testdata/", import.meta.url);
 const catalog = JSON.parse(readFileSync(new URL("catalog.json", dir)));
 const samples = JSON.parse(readFileSync(new URL("check.json", dir)));
 
