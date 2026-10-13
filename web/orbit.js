@@ -83,3 +83,32 @@ export function gmst(t) {
 export function period(p, i) {
   return TWO_PI / p.cat.n[i];
 }
+
+/**
+ * Direction from the Earth to the Sun at unix time t, as a unit vector in
+ * the same inertial frame as the orbits. Good to a fraction of a degree,
+ * which is all a day/night line on a globe needs.
+ * @param {number} t unix seconds
+ * @returns {[number, number, number]}
+ */
+export function sunDirection(t) {
+  const days = t / 86400 + 2440587.5 - 2451545.0;
+  const rad = Math.PI / 180;
+  const meanLongitude = (280.46 + 0.9856474 * days) * rad;
+  const meanAnomaly = (357.528 + 0.9856003 * days) * rad;
+  const longitude = meanLongitude + (1.915 * Math.sin(meanAnomaly) + 0.02 * Math.sin(2 * meanAnomaly)) * rad;
+  const tilt = (23.439 - 0.0000004 * days) * rad;
+  return [Math.cos(longitude), Math.cos(tilt) * Math.sin(longitude), Math.sin(tilt) * Math.sin(longitude)];
+}
+
+/**
+ * Height above the equatorial radius and speed of object i at time t, from
+ * the viewer's light orbit model.
+ * @returns {{altitudeKm: number, speedKmS: number}}
+ */
+export function describe(p, i, t) {
+  const out = new Float64Array(3);
+  position(p, i, t, out, 0);
+  const r = Math.hypot(out[0], out[1], out[2]);
+  return { altitudeKm: r - EARTH_RADIUS_KM, speedKmS: Math.sqrt(MU * (2 / r - 1 / p.a[i])) };
+}

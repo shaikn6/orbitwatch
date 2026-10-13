@@ -2,9 +2,23 @@
 
 Every tracked object in Earth orbit on a live 3D globe, with the closest predicted passes of the next 48 hours.
 
-![The viewer: 28,748 objects, with two satellites 44 seconds from their closest pass](docs/viewer.png)
+![The viewer: every tracked object around a day-and-night Earth, with the closest predicted pass selected](docs/viewer.png)
 
 There are about 29,000 catalogued objects in orbit: working satellites, dead ones, spent rocket stages and fragments. Orbit Watch downloads the public orbit data for all of them, predicts where each will be, finds every pair that will pass within 5 km of each other, and shows the result on a globe you can spin and replay.
+
+## Using the viewer
+
+- **Drag** to turn the globe, **scroll** to zoom. Left alone, it turns slowly by itself.
+- **Hover** any dot to see what it is and how high it flies. **Click** it for its speed, orbit and close passes, and press **Follow** to ride along with it.
+- **Find any object** by name or catalogue number: the space station is `ISS (ZARYA)`.
+- **Click a pass** in the list, or one of the red rings on the globe, to see the two orbits cross. **Watch the pass** jumps to a minute before and counts down alongside the pair.
+- **Drag the timeline** to move through the 48 hours; each mark on it is a predicted pass, taller for closer ones. Time can run at up to 3,600 times real speed.
+- The three counters under the title **switch satellites, debris and rocket bodies** on and off.
+- Keys: `space` pauses, `/` jumps to the search box, `esc` resets, and the left and right arrows step ten minutes.
+
+The lit side of the Earth is where the Sun really is at the time shown, and the city lights are on the night side.
+
+![Riding along with two satellites, 71 seconds before their closest pass](docs/replay.png)
 
 ## What has been measured
 
@@ -54,7 +68,7 @@ go build -o bin/validate ./cmd/validate && bin/validate   # against a SOCRATES r
 
 **Data (`internal/fetch`, `internal/catalog`).** Element sets are cached. A download replaces the cached copy only after it has been read completely and parsed, so an error page or a dropped connection never destroys good data. Sources are merged with the newest element set per object winning, except that anything dated in the future is rejected, and element sets older than 14 days are left out.
 
-**Viewer (`web/`).** The browser animates all objects with a lighter orbit model (an ellipse that drifts the way the Earth's bulge makes it drift). It is checked against SGP4 in the tests: the typical object is within 13 km over up to 40 hours, which is far less than a pixel. The list, distances and times come from the server's full-precision results.
+**Viewer (`web/`).** Plain JavaScript and three.js, no build step. The browser animates all objects with a lighter orbit model (an ellipse that drifts the way the Earth's bulge makes it drift). It is checked against SGP4 in the tests: the typical object is within 13 km over up to 40 hours, which is far less than a pixel. The list, distances and times come from the server's full-precision results.
 
 ## Keeping it current
 

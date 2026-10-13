@@ -32,3 +32,29 @@ test("the Earth turns once per sidereal day", () => {
   const turned = (gmst(t + 86164.0905) - gmst(t) + 4 * Math.PI) % (2 * Math.PI);
   assert.ok(turned < 1e-4 || turned > 2 * Math.PI - 1e-4, `turned ${turned} rad`);
 });
+
+test("the Sun is where the calendar says it is", async () => {
+  const { sunDirection } = await import("./orbit.js");
+  const at = (iso) => sunDirection(Date.parse(iso) / 1000);
+  const tilt = Math.sin((23.44 * Math.PI) / 180);
+  // March equinox 2026: on the equator, along the reference direction.
+  let [x, y, z] = at("2026-03-20T14:46:00Z");
+  assert.ok(x > 0.999 && Math.abs(y) < 0.02 && Math.abs(z) < 0.01, `equinox ${[x, y, z]}`);
+  // June solstice: as far north as it gets.
+  [x, y, z] = at("2026-06-21T08:24:00Z");
+  assert.ok(Math.abs(z - tilt) < 0.002 && Math.abs(x) < 0.02, `solstice ${[x, y, z]}`);
+  // December solstice: as far south.
+  [x, y, z] = at("2026-12-21T20:50:00Z");
+  assert.ok(Math.abs(z + tilt) < 0.002, `december ${[x, y, z]}`);
+  assert.ok(Math.abs(Math.hypot(x, y, z) - 1) < 1e-9);
+});
+
+test("a low satellite is a few hundred km up and moving at about 7.6 km/s", async () => {
+  const { describe } = await import("./orbit.js");
+  const prepared = prepare(catalog);
+  const iss = catalog.id.indexOf(25544);
+  assert.ok(iss >= 0, "the space station is in the catalogue");
+  const { altitudeKm, speedKmS } = describe(prepared, iss, catalog.epoch[iss] + 600);
+  assert.ok(altitudeKm > 350 && altitudeKm < 460, `altitude ${altitudeKm}`);
+  assert.ok(speedKmS > 7.5 && speedKmS < 7.8, `speed ${speedKmS}`);
+});
