@@ -26,7 +26,7 @@ Run on an Apple M2 Pro laptop with public data fetched on 12 October 2026.
 
 | Check                                                                 | Result                                                                                    |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Orbit model against the official verification set (AIAA 2006-6753)    | all 666 positions of 31 objects agree to within 0.0001 m                                  |
+| Orbit model against the official verification set (AIAA 2006-6753)    | all 666 positions of 31 objects agree to within 0.00012 m (worst case 0.000118 m)         |
 | Screening against a brute-force search of every pair, every second    | 152 of 152 close approaches found, same time to 10 ms and distance to 1 m                 |
 | Work avoided by the screening grid in that test                       | 99.86% of pair checks                                                                     |
 | Full catalog, all pairs, 7 days                                       | 29,019 objects in 3 min 24 s                                                              |

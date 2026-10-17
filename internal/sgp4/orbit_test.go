@@ -93,7 +93,7 @@ func TestMatchesTheOfficialVerificationSet(t *testing.T) {
 		if miss > worst {
 			worst, worstAt = miss, strconv.Itoa(current.NoradID)+" at "+fields[0]+" min"
 		}
-		if miss > 1e-5 || speed > 1e-8 {
+		if miss > 1e-6 || speed > 1e-8 {
 			t.Errorf("object %d at %.1f min: off by %.3g km and %.3g km/s", current.NoradID, want[0], miss, speed)
 		}
 		checked++
