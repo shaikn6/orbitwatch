@@ -57,8 +57,11 @@ To repeat the checks:
 ```sh
 go test ./...                     # orbit model, catalog, screening, fetching, pipeline
 node --test web/orbit.test.mjs    # the viewer's orbit maths against the server's
-go build -o bin/validate ./cmd/validate && bin/validate   # against a SOCRATES report in data/raw
+curl -o data/raw/socrates_minrange.csv 'https://celestrak.org/SOCRATES/sort-minRange.csv'
+go build -o bin/validate ./cmd/validate && bin/validate   # writes runs/validation.json
 ```
+
+`validate` needs two things in `data/raw`: the element sets from `bin/orbitwatch fetch`, and CelesTrak's SOCRATES report (the CSV sorted by minimum range, saved as `socrates_minrange.csv`). It screens the report's whole window, about 7 days, so it takes longer than the 48-hour run. Download the report right after `fetch`: only events where both sides used the same element sets are expected to agree exactly, and CelesTrak updates element sets every two hours.
 
 ## How it works
 
@@ -105,6 +108,19 @@ Three policies on the same million simulated warnings:
 **The learned policy does not beat the rule.** It learns, from reward alone, to cut the cost ninefold compared with doing nothing, and it burns less fuel than the rule, but it under-reacts in a small number of risky cases, and those are expensive. The tuned rule is about 11% cheaper overall. Training three times longer with a decaying step size narrowed the gap to about 7% (cost 0.0787 ± 0.0019 over 2 runs) without closing it.
 
 Two cautions. The uncertainty model (0.1 km plus 1 km per day along the track, a tenth of that in the other directions) is an assumption chosen to match commonly quoted figures for public tracking data; it is not fitted to any operator's data, and every number in the table depends on it. And "cost" is my weighting of fuel against risk: one failure is priced at twenty full-size burns.
+
+To reproduce the table (torch is needed only for `train.py`):
+
+```sh
+python -m venv .venv && .venv/bin/pip install -r rl/requirements.txt
+cd rl
+../.venv/bin/python -m pytest -q test_conjunction.py   # the simulator checks
+../.venv/bin/python baseline.py    # "Do nothing" and "Threshold rule" rows; writes runs/baseline.json
+../.venv/bin/python train.py       # PPO, 3 runs of 400 iterations; writes runs/ppo.json
+../.venv/bin/python train.py --seeds 2 --iterations 1200 --first-seed 11 --tag ppo_long   # the three-times-longer run
+```
+
+The PPO row came from an earlier version of `train.py`. The committed version always decays the step size, which the text above describes only for the longer run, so `train.py` with its defaults need not give exactly 0.0819.
 
 ## Not done yet
 

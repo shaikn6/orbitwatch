@@ -12,6 +12,7 @@ package main
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -120,6 +121,9 @@ func main() {
 	flag.Parse()
 
 	refs, err := readReference(*report)
+	if errors.Is(err, os.ErrNotExist) {
+		log.Fatalf("no SOCRATES report at %s. Download it right after `orbitwatch fetch` (see README, \"To repeat the checks\"):\n  curl -o %s 'https://celestrak.org/SOCRATES/sort-minRange.csv'", *report, *report)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
