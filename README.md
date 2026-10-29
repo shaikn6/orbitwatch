@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/shaikn6/orbitwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/shaikn6/orbitwatch/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go 1.26.4+](https://img.shields.io/badge/Go-1.26.4%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 
 **Orbit Watch puts every tracked object in Earth orbit on a live 3D globe and lists the closest predicted passes of the next 48 hours, screened in Go and checked against the official SGP4 test set and CelesTrak SOCRATES.**
 
@@ -47,7 +47,7 @@ The comparison with SOCRATES covers 358 events only, because that is how many we
 
 ## Quickstart
 
-Requires Go 1.26. The viewer loads three.js and the Earth image from a CDN.
+Requires Go 1.26.4 or newer. The viewer loads three.js and the Earth image from a CDN.
 
 ```sh
 go build -o bin/orbitwatch ./cmd/orbitwatch
