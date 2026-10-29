@@ -1,6 +1,10 @@
-# Orbit Watch
+# orbitwatch
 
-Every tracked object in Earth orbit on a live 3D globe, with the closest predicted passes of the next 48 hours.
+[![CI](https://github.com/shaikn6/orbitwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/shaikn6/orbitwatch/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
+
+**Orbit Watch puts every tracked object in Earth orbit on a live 3D globe and lists the closest predicted passes of the next 48 hours, screened in Go and checked against the official SGP4 test set and CelesTrak SOCRATES.**
 
 ![The viewer: every tracked object around a day-and-night Earth, with the closest predicted pass selected](docs/viewer.png)
 
@@ -41,7 +45,7 @@ The 48-hour run found 205,612 passes under 5 km, 11,255 under 1 km and 511 under
 
 The comparison with SOCRATES covers 358 events only, because that is how many were computed from the same orbit data on both sides: my data was fetched about 22 hours after the report was produced, and most objects had been updated in between. One of the 358 was not found; for that pair my data puts the objects more than 50 km apart, which points to a reissued data set rather than a screening error, but I have not proven that. A matched snapshot is needed to repeat this at a larger scale.
 
-## Run it
+## Quickstart
 
 Requires Go 1.26. The viewer loads three.js and the Earth image from a CDN.
 
@@ -64,6 +68,17 @@ go build -o bin/validate ./cmd/validate && bin/validate   # writes runs/validati
 `validate` needs two things in `data/raw`: the element sets from `bin/orbitwatch fetch`, and CelesTrak's SOCRATES report (the CSV sorted by minimum range, saved as `socrates_minrange.csv`). It screens the report's whole window, about 7 days, so it takes longer than the 48-hour run. Download the report right after `fetch`: only events where both sides used the same element sets are expected to agree exactly, and CelesTrak updates element sets every two hours.
 
 ## How it works
+
+```mermaid
+flowchart LR
+    C["CelesTrak<br/>public element sets"] --> F["internal/fetch<br/>cached download"]
+    F --> K["internal/catalog<br/>merge, newest set wins"]
+    K --> S["internal/screen<br/>15 s steps, cube grid"]
+    G["internal/sgp4<br/>orbit model"] --> S
+    S -->|"cmd/orbitwatch screen"| D[("web/data")]
+    D --> V["web/<br/>three.js viewer"]
+    S -.->|"watch, optional"| P["internal/pipeline<br/>Kafka publisher"]
+```
 
 **Orbit model (`internal/sgp4`).** Public orbit data is published as "mean elements" that only make sense with one specific model, SGP4. The numerical core is adapted from [go-satellite](https://github.com/joshuaferrara/go-satellite), with three faults found and fixed while checking it against the official test set: a wrong constant in the branch for very low orbits (128 where the reference has 120), orbit reference times rounded down to whole seconds (worth up to 7 km of position), and a height calculation that failed above the poles.
 
