@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -143,6 +144,7 @@ type screenConfig struct {
 	maxAge   time.Duration
 	top      int
 	out      string
+	csv      string
 }
 
 func runScreen(args []string) {
@@ -154,6 +156,7 @@ func runScreen(args []string) {
 	fs.DurationVar(&cfg.maxAge, "max-age", 14*24*time.Hour, "ignore element sets older than this")
 	fs.IntVar(&cfg.top, "top", 2000, "closest approaches to list for the viewer")
 	fs.StringVar(&cfg.out, "out", "web/data", "output directory")
+	fs.StringVar(&cfg.csv, "csv", "", "also write the listed close approaches to this CSV file")
 	fs.Parse(args)
 	cfg.start = time.Now().UTC().Truncate(time.Minute)
 	if *startFlag != "" {
@@ -162,8 +165,15 @@ func runScreen(args []string) {
 			log.Fatalf("bad -start: %v", err)
 		}
 	}
-	if _, _, err := screenOnce(cfg); err != nil {
+	sum, _, err := screenOnce(cfg)
+	if err != nil {
 		log.Fatal(err)
+	}
+	if cfg.csv != "" {
+		if err := writeEventsCSV(cfg.csv, sum.Events); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("wrote %s: %d close approaches", cfg.csv, len(sum.Events))
 	}
 }
 
@@ -391,6 +401,45 @@ func writeJSON(path string, v any) error {
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// writeEventsCSV writes the listed close approaches as CSV, one row per
+// event plus a header, so the results are usable without the viewer. It
+// uses the same temporary-file swap as writeJSON.
+func writeEventsCSV(path string, events []viewerEvent) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	w := csv.NewWriter(f)
+	if err := w.Write([]string{
+		"norad_a", "norad_b", "name_a", "name_b", "kind_a", "kind_b",
+		"tca", "miss_km", "rel_speed_km_s", "lat", "lon", "alt_km",
+	}); err != nil {
+		f.Close()
+		return err
+	}
+	for _, e := range events {
+		if err := w.Write([]string{
+			strconv.Itoa(e.A), strconv.Itoa(e.BID), e.NameA, e.NameB, e.KindA, e.KindB,
+			e.TCA.Format(time.RFC3339), strconv.FormatFloat(e.MissKm, 'f', -1, 64),
+			strconv.FormatFloat(e.RelSpeedKmS, 'f', -1, 64), strconv.FormatFloat(e.Lat, 'f', -1, 64),
+			strconv.FormatFloat(e.Lon, 'f', -1, 64), strconv.FormatFloat(e.AltKm, 'f', -1, 64),
+		}); err != nil {
+			f.Close()
+			return err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
