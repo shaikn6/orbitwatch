@@ -56,6 +56,12 @@ bin/orbitwatch screen -hours 48   # find close approaches, write web/data
 bin/orbitwatch serve              # open http://127.0.0.1:8080
 ```
 
+Add `-csv <path>` to `screen` to also write the listed close approaches as CSV, so the results are usable without the viewer. One header row plus one row per pass, columns `norad_a,norad_b,name_a,name_b,kind_a,kind_b,tca,miss_km,rel_speed_km_s,lat,lon,alt_km`:
+
+```sh
+bin/orbitwatch screen -hours 48 -csv conjunctions.csv
+```
+
 To repeat the checks:
 
 ```sh
