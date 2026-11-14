@@ -161,3 +161,6 @@ The PPO row came from an earlier version of `train.py`. The committed version al
 ## Licence
 
 MIT. See `LICENSE`.
+
+---
+<sub>Part of [Nagizaaz Shaik's open-source work](https://github.com/shaikn6) · [all repositories](https://github.com/shaikn6?tab=repositories)</sub>
