@@ -1,5 +1,7 @@
 # orbitwatch
 
+> **Every tracked object in orbit on a live 3D globe, with the closest passes over you in the next 48 hours.**
+
 [![CI](https://github.com/shaikn6/orbitwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/shaikn6/orbitwatch/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Go 1.26.4+](https://img.shields.io/badge/Go-1.26.4%2B-00ADD8?logo=go&logoColor=white)](go.mod)
