@@ -1,6 +1,6 @@
 module github.com/shaikn6/orbitwatch
 
-go 1.26.4
+go 1.26.11
 
 require github.com/twmb/franz-go v1.22.3
 
