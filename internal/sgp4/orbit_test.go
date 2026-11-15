@@ -198,3 +198,20 @@ func TestAtRefusesAbsurdTimeSpans(t *testing.T) {
 		t.Errorf("At(one day) = %v", err)
 	}
 }
+
+// julianDate must agree with the Unix-epoch identity JD = 2440587.5 +
+// seconds/86400, including the sub-second part and across a leap day and a
+// year end.
+func TestJulianDateMatchesUnixEpochIdentity(t *testing.T) {
+	for _, tm := range []time.Time{
+		time.Unix(0, 0).UTC(), // JD 2440587.5 by definition
+		time.Date(2024, 2, 29, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+		time.Date(2026, 10, 12, 6, 30, 15, 250_000_000, time.UTC),
+	} {
+		want := 2440587.5 + (float64(tm.Unix())+float64(tm.Nanosecond())/1e9)/86400
+		if got := julianDate(tm); math.Abs(got-want) > 1e-9 {
+			t.Errorf("julianDate(%s) = %.9f, want %.9f (off %.2e days)", tm, got, want, got-want)
+		}
+	}
+}
