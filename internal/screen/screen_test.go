@@ -168,3 +168,24 @@ func TestDecayedObjectIsCountedAndDoesNotStopTheRun(t *testing.T) {
 		t.Fatalf("lost = %d, want exactly the decaying object", stats.Lost)
 	}
 }
+
+// merge removes duplicate reports of the same approach and keeps the closest.
+func TestMergeCollapsesDuplicatesAndSorts(t *testing.T) {
+	window := 30 * time.Second
+	mk := func(a, b int, sec, miss float64) Event {
+		return Event{A: a, B: b, TCA: start.Add(time.Duration(sec * float64(time.Second))), MissKm: miss}
+	}
+
+	// A chain of reports of one pair, each within the window of the last,
+	// collapses to the single closest.
+	got := merge([]Event{mk(1, 2, 0, 5), mk(1, 2, 10, 2), mk(1, 2, 20, 3)}, window)
+	same(t, "chained duplicates", got, []Event{mk(1, 2, 10, 2)})
+
+	// The same pair again, but beyond the window, is a separate approach.
+	got = merge([]Event{mk(1, 2, 0, 5), mk(1, 2, 60, 4)}, window)
+	same(t, "beyond window", got, []Event{mk(1, 2, 0, 5), mk(1, 2, 60, 4)})
+
+	// The result is sorted by time, then by the lower and higher id.
+	got = merge([]Event{mk(1, 2, 100, 1), mk(3, 4, 0, 1), mk(1, 2, 0, 1)}, window)
+	same(t, "sort order", got, []Event{mk(1, 2, 0, 1), mk(3, 4, 0, 1), mk(1, 2, 100, 1)})
+}
