@@ -1,0 +1,31 @@
+{
+  "args": {
+    "seeds": 2,
+    "iterations": 1200,
+    "batch": 8192,
+    "first_seed": 11,
+    "tag": "ppo_long"
+  },
+  "seeds": {
+    "11": {
+      "cost": 0.08054252852382958,
+      "keep_out_failures_per_1000": 0.837,
+      "collisions_per_million": 2.0,
+      "fuel_cm_s": 0.24591164261914794,
+      "burns_per_warning": 0.146202,
+      "warnings_with_a_burn": 0.123115,
+      "training_minutes": 11.188058114051818
+    },
+    "12": {
+      "cost": 0.07675843296108395,
+      "keep_out_failures_per_1000": 0.8899999999999999,
+      "collisions_per_million": 6.0,
+      "fuel_cm_s": 0.21211466480541977,
+      "burns_per_warning": 0.165355,
+      "warnings_with_a_burn": 0.134343,
+      "training_minutes": 11.620330735047657
+    }
+  },
+  "cost_mean": 0.07865048074245676,
+  "cost_std": 0.0018920477813728145
+}

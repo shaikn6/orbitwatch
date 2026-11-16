@@ -41,6 +41,8 @@ Run on an Apple M2 Pro laptop with public data fetched on 12 October 2026.
 
 The 48-hour run found 205,612 passes under 5 km, 11,255 under 1 km and 511 under 200 m, plus 937 pairs that fly together on purpose (docked modules, formations), which are counted separately.
 
+The full-catalog 7-day screen and the SOCRATES comparison are in [`results/validation.json`](results/validation.json), the output of `bin/validate` from that run. The 48-hour run's counts and timing were read from its console output and have no committed file; the timings are from one run on a laptop and will differ elsewhere.
+
 ## Read this before quoting a number
 
 **These are screening candidates, not near-collisions.** Public orbit data is accurate to roughly a kilometre, and less than that a few days ahead. A predicted miss of 10 m means "these two will be in the same small region at the same time", not "these two will pass 10 m apart". Operators decide on avoidance manoeuvres using their own, far more precise tracking. Nothing here should be used for that decision.
@@ -143,7 +145,7 @@ cd rl
 ../.venv/bin/python train.py --seeds 2 --iterations 1200 --first-seed 11 --tag ppo_long   # the three-times-longer run
 ```
 
-The PPO row came from an earlier version of `train.py`. The committed version always decays the step size, which the text above describes only for the longer run, so `train.py` with its defaults need not give exactly 0.0819.
+The outputs behind the table are committed: [`results/baseline.json`](results/baseline.json), [`results/ppo.json`](results/ppo.json) and [`results/ppo_long.json`](results/ppo_long.json) (the scripts write them to `rl/runs/`, which is not tracked). The PPO row came from an earlier version of `train.py`. The committed version always decays the step size, which the text above describes only for the longer run, so `train.py` with its defaults need not give exactly 0.0819.
 
 ## Not done yet
 

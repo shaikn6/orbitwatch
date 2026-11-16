@@ -1,0 +1,38 @@
+{
+  "args": {
+    "seeds": 3,
+    "iterations": 400,
+    "batch": 8192
+  },
+  "seeds": {
+    "1": {
+      "cost": 0.08303977894631774,
+      "keep_out_failures_per_1000": 1.002,
+      "collisions_per_million": 5.0,
+      "fuel_cm_s": 0.23044889473158864,
+      "burns_per_warning": 0.1691,
+      "warnings_with_a_burn": 0.137994,
+      "training_minutes": 4.7824652353922525
+    },
+    "2": {
+      "cost": 0.08238716718575656,
+      "keep_out_failures_per_1000": 0.973,
+      "collisions_per_million": 0.0,
+      "fuel_cm_s": 0.2429318359287828,
+      "burns_per_warning": 0.143408,
+      "warnings_with_a_burn": 0.120066,
+      "training_minutes": 4.410534266630808
+    },
+    "3": {
+      "cost": 0.0802939017731838,
+      "keep_out_failures_per_1000": 0.9520000000000001,
+      "collisions_per_million": 2.0,
+      "fuel_cm_s": 0.23980050886591897,
+      "burns_per_warning": 0.132938,
+      "warnings_with_a_burn": 0.117297,
+      "training_minutes": 4.392134320735932
+    }
+  },
+  "cost_mean": 0.0819069493017527,
+  "cost_std": 0.0011713004950545003
+}
