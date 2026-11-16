@@ -1,0 +1,23 @@
+{
+  "rule": {
+    "first_decision_hours": 12.0,
+    "act_above": 0.1,
+    "aim_below": 0.01
+  },
+  "do nothing": {
+    "cost": 0.75404,
+    "keep_out_failures_per_1000": 37.702,
+    "collisions_per_million": 401.0,
+    "fuel_cm_s": 0.0,
+    "burns_per_warning": 0.0,
+    "warnings_with_a_burn": 0.0
+  },
+  "tuned rule": {
+    "cost": 0.07350045,
+    "keep_out_failures_per_1000": 0.17300000000000001,
+    "collisions_per_million": 0.0,
+    "fuel_cm_s": 0.25892624999999997,
+    "burns_per_warning": 0.182552,
+    "warnings_with_a_burn": 0.163871
+  }
+}
